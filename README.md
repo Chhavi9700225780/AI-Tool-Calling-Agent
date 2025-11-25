@@ -1,7 +1,7 @@
 
 # **🧠 Tool-Calling AI Agent**
 
-A lightweight AI system built using **FastAPI**, **Streamlit**, **Langchain** **Sentence Transformers** that can *understand user queries* and *route them to the correct tool* using **semantic similarity**.
+A lightweight AI system built using **FastAPI**, **Streamlit**, **Langchain**, **Sentence Transformers** that can *understand user queries* and *route them to the correct tool* using **semantic similarity**.
 
 It also stores **long-term memory** in a JSON file for retrieval and context awareness.
 
