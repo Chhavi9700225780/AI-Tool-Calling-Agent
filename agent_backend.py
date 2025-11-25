@@ -7,19 +7,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
-# LangChain Imports (Pinned Versions: 0.1.x)
+# LangChain Imports 
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableBranch, RunnablePassthrough
-from langchain.memory import ConversationBufferMemory # This import works for 0.1.20
+from langchain.memory import ConversationBufferMemory 
 
 # --- Setup ---
 load_dotenv()
 app = FastAPI(title="LangChain ToolCalling Agent API", version="0.1.20-compatible")
 
 # Configure CORS to allow the Streamlit frontend to access the API
-# NOTE: If deploying, replace "*" with your Streamlit app's URL (e.g., "http://localhost:8501")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -38,8 +38,7 @@ class QueryRequest(BaseModel):
 # 1. STATE MANAGEMENT (Global for simplicity, thread-safe access is limited)
 # ============================================================
 
-# In-memory dict to store student marks - using a global lock might be needed in production, 
-# but for simple demonstration, this is fine.
+
 marks_memory: Dict[str, Dict[str, int]] = {}
 
 # Dictionary to hold separate memory buffers for each user/session
@@ -62,7 +61,7 @@ def get_session_memory(session_id: str) -> ConversationBufferMemory:
 # ============================================================
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
-    # This setting is crucial for the older version to handle the system prompt
+    # This is to handle the system prompt
     convert_system_message_to_human=True 
 )
 
@@ -119,7 +118,7 @@ def student_marks_tool(request: str):
 
 
 # ============================================================
-# 4. ROUTER CHAIN (The logic remains the same)
+# 4. ROUTER CHAIN 
 # ============================================================
 router_prompt = ChatPromptTemplate.from_messages([
     ("system",
@@ -214,6 +213,3 @@ async def handle_query(request: QueryRequest) -> Dict[str, str]:
 def read_root():
     return {"message": "LangChain Router API is running."}
 
-# if __name__ == "__main__":
-#     # For local testing, run with: uvicorn fastapi_backend:app --reload
-#     pass
