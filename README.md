@@ -1,225 +1,273 @@
 
-# **🧠 Tool-Calling AI Agent**
+---
 
-A lightweight AI system built using **FastAPI**, **Streamlit**, **Langchain**, **Sentence Transformers** that can *understand user queries* and *route them to the correct tool* using **semantic similarity**.
+# 📘 **LangChain AI-Tool-Calling Agent **
 
-It also stores **long-term memory** in a JSON file for retrieval and context awareness.
+## 🧩 **Overview**
+
+This project is a **LangChain Router-Agent** that uses **tool calling, prompt classification, memory**, and **FastAPI + Streamlit** to build an AI system that automatically routes user queries to different tools:
+
+* Positive message generator
+* Negative prompt handler
+* Suicide-related helper
+* Student marks management tool
+* Default conversational LLM
+
+The system uses **Google Gemini 2.5 Flash**, **LangChain (0.1.x)**, **FastAPI backend**, and a **Streamlit frontend**.
 
 ---
 
-## 📂 **Folder Structure**
+## 🎯 **Purpose of the Project**
 
-Based on your screenshot:
+This project demonstrates how to build:
+
+### ✔️ A Router Agent
+
+Using LangChain’s `RunnableBranch`, the system detects the intent and selects the correct tool.
+
+### ✔️ Multi-tool AI System
+
+Four tools + default LLM pipeline.
+
+### ✔️ Full-Stack LLM App
+
+* **Backend** → FastAPI
+* **Frontend** → Streamlit
+* **Memory** → ConversationBufferMemory (per session)
+
+### ✔️ Local Interaction + API
+
+Perfect for learning LLM agent architectures using LangChain.
+
+---
+
+## 🚀 **Key Features**
+
+### 🧠 **1. Intent Classification Router**
+
+Classifies each incoming query into:
+
+* `positive`
+* `negative`
+* `marks`
+* `suicide`
+* `default`
+
+### 🔧 **2. Tools Implemented**
+
+| Tool                 | Description                       |
+| -------------------- | --------------------------------- |
+| Positive Prompt Tool | Motivational message              |
+| Negative Prompt Tool | Warns about negativity            |
+| Suicide Safety Tool  | Sends supportive + safety message |
+| Student Marks Tool   | Add & Retrieve student marks      |
+| Default LLM Tool     | Handles general questions         |
+
+---
+
+## 🏗️ **Project Architecture**
+
+<img width="1344" height="768" alt="Gemini_Generated_Image_gdn7ljgdn7ljgdn7" src="https://github.com/user-attachments/assets/56cbd7df-c1bc-432a-8eb0-83180eb5b32c" />
+
+
+---
+
+## 📁 **Folder Structure**
 
 ```
-FAPI/
+AI-Tool-Calling-Agent/
 │
-├── __pycache__/            # Auto-generated cache files
+├── LangChainToolCallingAgentCode/
+│   ├── main.py
+│   ├── requirements.txt
 │
-├── agent_backend.py        # FastAPI backend (main AI logic + semantic router)
-├── agent_frontend.py       # Streamlit frontend UI
-├── longterm_memory.json    # Local memory storage file
-│
-└── README.md               # Project documentation (this file)
-```
-
-**Screenshot reference:**
-
-
-<img width="693" height="395" alt="image" src="https://github.com/user-attachments/assets/517894f3-726a-4412-a2a9-ac8e5cf2d269" />
-
-
-
----
-
-# 🚀 **Project Purpose**
-
-This project demonstrates how to build your own **AI Agent** that:
-
-### ✔️ Understands user queries
-
-### ✔️ Chooses the correct tool using semantic embeddings
-
-### ✔️ Runs custom tools (positive prompts, negative prompts, student marks, suicide detection)
-
-### ✔️ Stores long-term memory
-
-### ✔️ Has a working frontend + backend system
-
----
-
-# 🧩 **What Each File Does**
-
-## 🔹 **1. agent_backend.py (FastAPI Backend)**
-
-<img width="692" height="390" alt="image" src="https://github.com/user-attachments/assets/2e2da724-9606-4295-bacc-165f2fd406a1" />
-
-This is the *brain* of the entire system.
-
-### **Purpose**
-
-* Exposes `/chat` API endpoint
-* Selects the best tool using semantic similarity
-* Executes the chosen tool
-* Saves all queries into longterm memory
-* Returns structured JSON response
-
-### **Key Features**
-
-| Feature          | Description                                                           |
-| ---------------- | --------------------------------------------------------------------- |
-| Semantic Routing | Uses SentenceTransformer to compare user query with tool descriptions |
-| 4 Tools          | Positive Prompt, Negative Prompt, Student Marks DB, Suicide Detection |
-| Memory           | Saves user interactions into longterm_memory.json                     |
-| API              | Fully REST-based FastAPI endpoint `/chat`                             |
-| Embeddings       | Uses all-MiniLM-L6-v2 model                                           |
-
-### **Input Format**
-
-```json
-{
-  "user_input": "your query here"
-}
-```
-
-### **Output Example**
-
-```json
-{
-  "routed_tool": "positive-prompt",
-  "router_score": 0.88,
-  "tool_output": { ... }
-}
+├── agent_backend.py        # FastAPI Server
+├── agent_frontend.py       # Streamlit Client UI
+├── requirements.txt
+├── README.md
+└── .gitignore
 ```
 
 ---
 
-## 🔹 **2. agent_frontend.py (Streamlit UI)**
+## 🛠️ **Tech Stack**
 
-A clean frontend that allows users to interact with the API visually.
-
-<img width="691" height="369" alt="image" src="https://github.com/user-attachments/assets/2a291c26-4d80-49b0-8e0a-e019b736c2cd" />
-
-
-### **Purpose**
-
-* Send user queries to the FastAPI backend
-* Display intelligent agent responses
-* Show router score, selected tool, output, and JSON debug view
-* Check backend server health
-
-### **How It Works**
-
-1. User enters a query
-2. Streamlit sends it to the backend via POST request
-3. Displays formatted tool output
-4. Shows full JSON response
+* **Python 3.10+**
+* **FastAPI**
+* **Streamlit**
+* **LangChain 0.1.x**
+* **Google Gemini 2.5 Flash**
+* **Requests**
+* **Uvicorn**
 
 ---
 
-## 🔹 **3. longterm_memory.json**
+## ⚙️ **Installation & Setup**
 
-### **Purpose**
-
-Stores **all user queries**, tool selections, and timestamps.
-
-### **Used For**
-
-* Memory-based query retrieval
-* Debugging
-* Future personalization
-
-### **Format**
-
-```json
-[
-  {
-    "type": "user_query",
-    "text": "give positive prompt",
-    "timestamp": 1732502000,
-    "tool_used": "positive-prompt"
-  }
-]
-```
-
----
-
-# 🛠️ **Tools Implemented in the Agent**
-
-| Tool Name           | Purpose                               | Example Input                       |
-| ------------------- | ------------------------------------- | ----------------------------------- |
-| **positive-prompt** | Returns uplifting suggestions         | "Give me a positive prompt"         |
-| **negative-prompt** | Filters negative words from prompts   | "Remove negativity"                 |
-| **student-marks**   | Add/get student marks                 | "Add 95 marks for Chris in History" |
-| **suicide-related** | Detects risky language, gives support | "I want to end my life"             |
-
----
-
-# 📡 **API Endpoint**
-
-### **POST** `/chat`
-
-Sends a query to backend and returns structured JSON.
-
-**Example Request**
+### **1. Clone the Repository**
 
 ```bash
-curl -X POST http://127.0.0.1:8000/chat \
--H "Content-Type: application/json" \
--d '{"user_input":"Add 90 marks for John in Maths"}'
+git clone <your-repo-url>
+cd AI-Tool-Calling-Agent
 ```
 
 ---
 
-# 🖥️ How to Run the Project
+### **2. Install Requirements**
 
-## **1️⃣ Start FastAPI Backend**
+Use one common `requirements.txt`:
+
+```
+pip install -r requirements.txt
+```
+
+---
+
+### **3. Set Environment Variables**
+
+Create `.env`:
+
+```
+GOOGLE_API_KEY=your_api_key_here
+```
+
+---
+
+### **4. Run FastAPI Backend**
 
 ```bash
 uvicorn agent_backend:app --reload
 ```
 
-Backend runs at:
-👉 **[http://127.0.0.1:8000](http://127.0.0.1:8000)**
+Backend will run at:
+
+```
+http://localhost:8000
+```
 
 ---
 
-## **2️⃣ Start Streamlit Frontend**
+### **5. Run Streamlit Frontend**
 
 ```bash
 streamlit run agent_frontend.py
 ```
 
-Frontend runs at:
-👉 **[http://localhost:8501](http://localhost:8501)**
+Streamlit UI opens at:
+
+```
+http://localhost:8501
+```
 
 ---
 
-# 🖼️ Screenshots
+## 🖼️ **Screenshots (Add Here)**
 
 
 
-## 🖼️ UI Screenshot
-<img width="691" height="388" alt="image" src="https://github.com/user-attachments/assets/533d163f-9bd4-43df-8a4b-c9ac2d60fdba" />
+### 📌 **Streamlit UI**
+
+<img width="692" height="284" alt="image" src="https://github.com/user-attachments/assets/8ef8ea4c-a514-4851-baeb-ea4a3f64f745" />
+<img width="693" height="352" alt="image" src="https://github.com/user-attachments/assets/7248209d-4320-46ec-92a6-46e5e02553ff" />
+<img width="692" height="197" alt="image" src="https://github.com/user-attachments/assets/e942aa80-3706-420c-92f5-68387490fcfa" />
 
 
-## 📝 Input/Output Example
-<img width="691" height="371" alt="image" src="https://github.com/user-attachments/assets/a3136ebd-0168-49eb-b585-9025cee8926f" />
+
+
+### 📌 **FastAPI Endpoint Test**
+
+
+<img width="691" height="358" alt="image" src="https://github.com/user-attachments/assets/a335d43a-1091-4368-9edb-696e417a4fc1" />
+<img width="692" height="239" alt="image" src="https://github.com/user-attachments/assets/20626fca-0304-4d80-81d0-f627c073dd69" />
+<img width="692" height="330" alt="image" src="https://github.com/user-attachments/assets/9ba32c24-3c82-48c8-8ac3-cfa126245aa6" />
 
 
 ---
 
-# 📦 Technologies Used
+## 🔌 **API Endpoint (FastAPI)**
 
-* **Python 3.10+**
-* **FastAPI**
-* **Streamlit**
-* **LangChain**
-* **Sentence Transformers**
-* **NumPy**
-* **Uvicorn**
-* **Requests**
+### **POST /query**
+
+#### **Request Body**
+
+```json
+{
+  "query": "add alice marks 92 for math",
+  "session_id": "user-123"
+}
+```
+
+#### **Response**
+
+```json
+{
+  "response": "Added marks: Alice - math: 92"
+}
+```
 
 ---
+
+## 🧪 **Examples to Try**
+
+```
+1. add alice marks 92 for math
+2. get marks of alice for math
+3. say something positive
+4. say something negative
+5. I feel hopeless
+6. What is the capital of Spain?
+```
+
+---
+
+## 🧵 **How Memory Works**
+
+* Each user is assigned a **unique session ID**
+* Each session stores conversation using:
+
+```
+ConversationBufferMemory
+```
+
+* Backend stores memory inside `session_memories` dictionary.
+
+---
+
+## 🐞 **Troubleshooting**
+
+### ❗ “convert_system_message_to_human” Error
+
+Fix applied in code:
+
+```python
+convert_system_message_to_human=True
+```
+
+### ❗ CORS Error
+
+Backend includes:
+
+```python
+allow_origins=["*"]
+```
+
+### ❗ Streamlit Not Updating
+
+Clear cache:
+
+```bash
+streamlit cache clear
+```
+
+
+---
+
+## 🧑‍💻 **Author**
+
+**Chhavi**
+
+Infosys Virtual Internship 6.0
+
+AI Tool-Calling Agent (LangChain)
 
 
