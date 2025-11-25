@@ -26,11 +26,9 @@ FAPI/
 **Screenshot reference:**
 
 
-```
-
 <img width="693" height="395" alt="image" src="https://github.com/user-attachments/assets/517894f3-726a-4412-a2a9-ac8e5cf2d269" />
 
-```
+
 
 ---
 
