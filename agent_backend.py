@@ -1,276 +1,219 @@
-import json
 import os
-import time
-from typing import Any, Dict, Callable, List, Tuple
+import re
+from typing import Dict, Any
 
-import numpy as np
-from sentence_transformers import SentenceTransformer
-from numpy.linalg import norm # This is imported but not used, good practice is to remove it, but keeping it for now
-
-# FastAPI Imports
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-# Removed: import nest_asyncio, uvicorn (will be imported later for __main__)
+from dotenv import load_dotenv
 
-# --- CONFIGURATION (Global Settings) ---
-MEMORY_FILE = "longterm_memory.json"
-# The model that turns text into vectors for meaning comparison (Semantic Routing)
-EMBEDDER = SentenceTransformer("all-MiniLM-L6-v2", token=False)
+# LangChain Imports (Pinned Versions: 0.1.x)
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableBranch, RunnablePassthrough
+from langchain.memory import ConversationBufferMemory # This import works for 0.1.20
+
+# --- Setup ---
+load_dotenv()
+app = FastAPI(title="LangChain ToolCalling Agent API", version="0.1.20-compatible")
+
+# Configure CORS to allow the Streamlit frontend to access the API
+# NOTE: If deploying, replace "*" with your Streamlit app's URL (e.g., "http://localhost:8501")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Pydantic model for request body
+class QueryRequest(BaseModel):
+    query: str
+    session_id: str
 
 
-# --- MEMORY AND UTILITY FUNCTIONS ---
-def load_memory() -> List[Dict[str, Any]]:
-    # Loads memories from the JSON file on disk.
-    if os.path.exists(MEMORY_FILE):
-        with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-            # Handle empty file case
-            content = f.read()
-            if content:
-                return json.loads(content)
-            return []
-    return []
+# ============================================================
+# 1. STATE MANAGEMENT (Global for simplicity, thread-safe access is limited)
+# ============================================================
 
-def save_memory(memories: List[Dict[str, Any]]):
-    # Writes the current memories back to the JSON file.
-    with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(memories, f, ensure_ascii=False, indent=2)
+# In-memory dict to store student marks - using a global lock might be needed in production, 
+# but for simple demonstration, this is fine.
+marks_memory: Dict[str, Dict[str, int]] = {}
 
-def embed(texts: List[str]) -> np.ndarray:
-    # Converts text into normalized numerical vectors (embeddings).
-    vecs = EMBEDDER.encode(
-        texts,
-        convert_to_numpy=True,
-        show_progress_bar=False
+# Dictionary to hold separate memory buffers for each user/session
+session_memories: Dict[str, ConversationBufferMemory] = {}
+
+def get_session_memory(session_id: str) -> ConversationBufferMemory:
+    """Retrieves or creates a ConversationBufferMemory instance for a given session ID."""
+    if session_id not in session_memories:
+        # Initialize memory with your compatible ChatGoogleGenerativeAI LLM
+        # Note: In 0.1.x, memory usually stores the history but doesn't handle the conversion for LLMs
+        session_memories[session_id] = ConversationBufferMemory(
+            memory_key="chat_history", 
+            return_messages=True
+        )
+    return session_memories[session_id]
+
+
+# ============================================================
+# 2. LLM CONFIGURATION
+# ============================================================
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    # This setting is crucial for the older version to handle the system prompt
+    convert_system_message_to_human=True 
+)
+
+
+# ============================================================
+# 3. TOOL HANDLERS
+# ============================================================
+
+def positive_prompt_tool(request: str):
+    return f"Stay strong! {request}"
+
+
+def negative_prompt_tool(request: str):
+    return f"Negative prompt: Avoid negativity like '{request}'"
+
+
+def suicide_related_tool(request: str):
+    return (
+        "I'm really sorry you feel this way. "
+        "Please reach out to someone you trust or a nearby helpline immediately. "
+        "You matter, and there are people who care about you."
     )
-    # Normalize vectors to unit length
-    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-    # Prevent division by zero for zero vectors (though rare)
-    norms[norms == 0] = 1.0
-    return vecs / norms
-
-def cosine_sim(a: np.ndarray, b: np.ndarray) -> float:
-    # Calculates how similar two vectors (and thus two texts) are.
-    # Assumes inputs a and b are already normalized unit vectors.
-    return float(np.dot(a, b))
 
 
-# --- TOOL IMPLEMENTATIONS (What the Agent Can Do) ---
+def student_marks_tool(request: str):
+    global marks_memory
 
-def positive_prompt_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
-    # Generates a simple uplifting prompt suggestion.
-    prompt = payload.get("text", "")
-    return {
-        "tool": "positive-prompt",
-        "generated": (f"Positive prompt for: {prompt}\nTry: \"Celebrate progress — what's one small win today?\"")
-    }
+    # ADD MARKS
+    add_pattern = r"add\s+(\w+)\s+marks\s+(\d+)\s+for\s+(\w+)"
+    match_add = re.search(add_pattern, request.lower())
 
-def negative_prompt_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
-    # Provides advice on what to filter out of a prompt.
-    prompt = payload.get("text", "")
-    return {
-        "tool": "negative-prompt",
-        "generated": (f"Negative prompt for: {prompt}\nTry to remove: overly-specific negative descriptors.")
-    }
+    if match_add:
+        name, score, subject = match_add.groups()
+        score = int(score)
 
-def student_marks_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
-    # Stores or retrieves student marks from the long-term memory file.
-    memories = load_memory()
-    action = payload.get("action", "get")
-    student = payload.get("student")
-    subject = payload.get("subject")
-    marks = payload.get("marks")
+        if name not in marks_memory:
+            marks_memory[name] = {}
+        marks_memory[name][subject] = score
 
-    if action == "add":
-        # Logic to add a new mark record.
-        if not student or subject is None or marks is None:
-            return {"error": "Missing fields for add action", "details": "Requires 'student', 'subject', and 'marks' fields."}
-        entry = {"type": "student_mark", "student": student, "subject": subject, "marks": marks, "timestamp": int(time.time()), "note": payload.get("note", "")}
-        memories.append(entry)
-        save_memory(memories)
-        return {"status": "ok", "added": entry}
-    else: # action == "get"
-        # Logic to filter and retrieve matching marks.
-        results = [m for m in memories if m.get("type") == "student_mark"]
-        if student:
-            results = [r for r in results if r.get("student", "").lower() == student.lower()]
-        if subject:
-            results = [r for r in results if r.get("subject", "").lower() == subject.lower()]
-        return {"status": "ok", "results": results}
+        return f"Added marks: {name.title()} - {subject}: {score}"
 
-def suicide_detection_tool(payload: Dict[str, Any]) -> Dict[str, Any]:
-    # Handles sensitive queries by detecting risk and providing safety resources.
-    text = payload.get("text", "")
-    LOWER = text.lower()
-    danger_keywords = ["kill myself", "end my life", "suicide", "want to die", "i'm going to die"]
-    is_high_risk = any(k in LOWER for k in danger_keywords)
-    response = {"tool": "suicide-related", "detected": bool(is_high_risk)}
-    if is_high_risk:
-        response["message"] = ("I'm really sorry you're feeling this way. If you need immediate help, please contact the National Suicide Prevention Lifeline at 988 (US) or your local emergency services. There are people who want to support you.")
-    else:
-        response["message"] = ("I detected concerns about self-harm but it doesn't look like immediate high-risk. Please remember that resources are available if you ever need to talk to someone.")
-    return response
+    # GET MARKS
+    get_pattern = r"get\s+.*marks.*\b(\w+)\b.*for\s+(\w+)"
+    match_get = re.search(get_pattern, request.lower())
 
-
-# --- TOOL REGISTRY AND EMBEDDINGS ---
-TOOLS: List[Dict[str, Any]] = [
-    # Master list of all available tools and their descriptions.
-    {"name": "positive-prompt", "description": "Generate short, uplifting prompts or positive writing prompts. Input: {'text': str}", "callable": positive_prompt_tool},
-    {"name": "negative-prompt", "description": "Produce negative prompt filtering suggestions and 'what to avoid' guidance for prompts. Input: {'text': str}", "callable": negative_prompt_tool},
-    {"name": "student-marks", "description": "Store or retrieve student marks. Actions: add/get. Input: {'action':'add'/'get','student':str,'subject':str,'marks':int}.", "callable": student_marks_tool},
-    {"name": "suicide-related", "description": "Detect suicide/self-harm risk and return a safety-first response. Input: {'text': str}.", "callable": suicide_detection_tool}
-]
-
-TOOL_TEXTS = [t["description"] for t in TOOLS]
-TOOL_EMBS = embed(TOOL_TEXTS) # Pre-calculate embeddings for faster routing.
-
-
-# --- SEMANTIC ROUTER ---
-def route_to_tool(user_text: str, top_k: int = 1) -> List[Tuple[Dict[str, Any], float]]:
-    # Compares the user's query to the tool descriptions to find the best match.
-    q_emb = embed([user_text])[0]
-    scores = [cosine_sim(q_emb, tvec) for tvec in TOOL_EMBS]
-    ranked = sorted(list(zip(TOOLS, scores)), key=lambda x: x[1], reverse=True)
-    return ranked[:top_k]
-
-def retrieve_memories(user_text: str, top_n: int = 3) -> List[Dict[str, Any]]:
-    # Searches past memory entries for semantic similarity to the current query.
-    memories = load_memory()
-    if not memories:
-        return []
-    mem_texts = [json.dumps(m, ensure_ascii=False) for m in memories]
-    mem_embs = embed(mem_texts)
-    q_emb = embed([user_text])[0]
-    sims = [(m, float(np.dot(q_emb, mem_embs[i]))) for i, m in enumerate(memories)]
-    sims_sorted = sorted(sims, key=lambda x: x[1], reverse=True)
-    return [m for m, s in sims_sorted[:top_n]]
-
-# Removed: format_tool_output (not used in the final endpoint)
-
-# ----------------------------------------------------------------------------------
-# FASTAPI APPLICATION SETUP
-# ----------------------------------------------------------------------------------
-
-# Initialize the FastAPI app object.
-app = FastAPI(title="Minimal Tool-Calling Agent API")
-
-# Defines the expected input structure for the API (must have 'user_input' field).
-class UserQuery(BaseModel):
-    user_input: str
-
-# ----------------------------------------------------------------------------------
-# API ENDPOINT DEFINITION (The core logic that runs everything)
-# ----------------------------------------------------------------------------------
-
-@app.post("/chat")
-async def chat_handler(query: UserQuery):
-    # This function runs every time someone sends a POST request to /chat.
-    user_input = query.user_input
-
-    # 1) Use the semantic router to pick the right tool.
-    ranked = route_to_tool(user_input, top_k=1)
-    best_tool, score = ranked[0]
-
-    # 2) Prepare the input data (payload) for the chosen tool.
-    payload = {}
-
-    # Simple text input for these tools.
-    if best_tool["name"] in ("positive-prompt", "negative-prompt", "suicide-related"):
-        payload = {"text": user_input}
-
-    # Complex parsing for the student marks tool (to extract add/get, name, subject, marks).
-    elif best_tool["name"] == "student-marks":
-        tokens = user_input.lower().split()
-        
-        # --- ADD/STORE Logic ---
-        if "add" in tokens or "store" in tokens:
-            action = "add"
-            try:
-                # Basic attempts to extract marks (first digit)
-                numbers = [int(t) for t in tokens if t.isdigit()]
-                marks = numbers[0] if numbers else None
-                
-                # Basic attempts to extract student name (word after 'add' or 'store')
-                idx = tokens.index("add") if "add" in tokens else tokens.index("store")
-                student = tokens[idx + 1] if idx + 1 < len(tokens) else "unknown"
-                
-                # Basic attempts to extract subject (word before 'marks' or last non-number word)
-                subject_tokens = [t for t in tokens if t not in ["add", "store", "marks"] and not t.isdigit()]
-                subject = subject_tokens[-1] if subject_tokens else "unknown"
-                
-                payload = {"action": action, "student": student.capitalize(), "subject": subject.capitalize(), "marks": marks}
-            except Exception:
-                # Fallback on failure
-                payload = {"action": "get", "student": None, "subject": None}
-
-        # --- GET/RETRIEVE Logic ---
+    if match_get:
+        name, subject = match_get.groups()
+        if name in marks_memory and subject in marks_memory[name]:
+            return f"{name.title()} scored {marks_memory[name][subject]} in {subject}."
         else:
-            action = "get"
-            student = None
-            subject = None
-            
-            # Simple parsing for student name
-            if "marks for" in user_input.lower():
-                parts = user_input.lower().split("marks for")
-                # Look for the student name after "marks for"
-                student_match = parts[1].strip().split()
-                if student_match:
-                    student = student_match[0].capitalize()
-            
-            payload = {"action": action, "student": student, "subject": subject}
+            return f"No marks found for {name.title()} in {subject}."
 
-    else:
-        # Fallback payload
-        payload = {"text": user_input}
+    return "Use 'add alice marks 92 for math' or 'get marks of alice for math'."
 
-    # 3) Run the selected tool's function.
+
+# ============================================================
+# 4. ROUTER CHAIN (The logic remains the same)
+# ============================================================
+router_prompt = ChatPromptTemplate.from_messages([
+    ("system",
+     """Classify the user's request into exactly ONE label:
+       positive, negative, marks, suicide, default"""
+     ),
+    ("user", "{request}")
+])
+
+router_chain = router_prompt | llm | StrOutputParser()
+
+# --- Conditions ---
+def is_positive(x): return x["decision"].strip().lower() == "positive"
+def is_negative(x): return x["decision"].strip().lower() == "negative"
+def is_marks(x): return x["decision"].strip().lower() == "marks"
+def is_suicide(x): return x["decision"].strip().lower() == "suicide"
+
+# --- Branches ---
+positive_branch = RunnablePassthrough.assign(
+    output=lambda x: positive_prompt_tool(x.get("request"))
+)
+
+negative_branch = RunnablePassthrough.assign(
+    output=lambda x: negative_prompt_tool(x.get("request"))
+)
+
+marks_branch = RunnablePassthrough.assign(
+    output=lambda x: student_marks_tool(x.get("request"))
+)
+
+suicide_branch = RunnablePassthrough.assign(
+    output=lambda x: suicide_related_tool(x.get("request"))
+)
+
+# The default branch now handles general questions by invoking the LLM directly
+# The LLM invocation here bypasses the memory, which is handled in the FastAPI endpoint below.
+default_branch = RunnablePassthrough.assign(
+    output=lambda x: llm.invoke(x.get('request')).content
+)
+
+
+# --- Delegation Logic ---
+delegation_chain = RunnableBranch(
+    (is_positive, positive_branch),
+    (is_negative, negative_branch),
+    (is_marks, marks_branch),
+    (is_suicide, suicide_branch),
+    default_branch
+)
+
+
+# --- Coordinator ---
+coordinator_agent = (
+    RunnablePassthrough()
+    .assign(decision=router_chain)
+    | delegation_chain
+    | (lambda x: x["output"])
+)
+
+# ============================================================
+# 5. API ENDPOINT
+# ============================================================
+
+@app.post("/query")
+async def handle_query(request: QueryRequest) -> Dict[str, str]:
+    """
+    Endpoint to receive a user query and process it through the LangChain router.
+    Handles memory storage and retrieval.
+    """
+    user_query = request.query
+    session_id = request.session_id
+    
+    # 1. Retrieve history for context (Note: The coordinator_agent above doesn't use history in this setup)
+    # The current setup only uses memory for *saving* context, not retrieving it for the router prompt.
+    # To fully integrate memory for conversation, the `router_prompt` and `default_branch` LLM call 
+    # would need to be updated to inject history. For this implementation, we simply save it.
+    
     try:
-        result = best_tool["callable"](payload)
+        # 2. Invoke the router/tool chain
+        result = coordinator_agent.invoke({"request": user_query})
+
+        # 3. Save conversation history
+        session_memory = get_session_memory(session_id)
+        session_memory.save_context({"human": user_query}, {"ai": result})
+        
+        return {"response": result}
+
     except Exception as e:
-        # If the tool breaks, return a clear error message.
-        return {"error": f"Tool execution error: {str(e)}", "tool_name": best_tool["name"], "payload_attempted": payload}
+        return {"response": f"An error occurred during processing: {e}"}
 
-    # 4) Save the original query to memory for later retrieval.
-    # Note: Only saving the query itself, not the result of the tool call.
-    memories = load_memory()
-    memories.append({
-        "type": "user_query",
-        "text": user_input,
-        "timestamp": int(time.time()),
-        "tool_used": best_tool["name"],
-        "route_score": score
-    })
-    save_memory(memories)
-
-    # 5) Return the final structured response.
-    return {
-        "user_query": user_input,
-        "routed_tool": best_tool["name"],
-        "router_score": round(score, 3),
-        "tool_payload": payload,
-        "tool_output": result
-    }
-
-# Add a root endpoint for a simple check
 @app.get("/")
 def read_root():
-    # Check to see if the API is alive.
-    return {"message": "Minimal Tool-Calling Agent API is running."}
+    return {"message": "LangChain Router API is running."}
 
-# ----------------------------------------------------------------------------------
-# LOCAL ENTRY POINT (Replaces Colab/Jupyter execution)
-# ----------------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    # This block allows you to run the file directly from your terminal:
-    # uvicorn agent_backend:app --reload
-    import uvicorn
-    uvicorn.run(
-        "agent_backend:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=True, # Auto-reload on code changes (helpful during development)
-        log_level="info"
-    )
-
-    #streamlit run agent_frontend.py
-    #uvicorn agent_backend:app --reload
+# if __name__ == "__main__":
+#     # For local testing, run with: uvicorn fastapi_backend:app --reload
+#     pass
