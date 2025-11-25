@@ -1,7 +1,7 @@
 
 ---
 
-# 📘 **LangChain AI-Tool-Calling Agent **
+# 📘 LangChain AI-Tool-Calling Agent 
 
 ## 🧩 **Overview**
 
