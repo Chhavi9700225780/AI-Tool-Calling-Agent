@@ -1,240 +1,258 @@
-# ============================================
-# IMPORTS
-# ============================================
-from langchain_google_genai import ChatGoogleGenerativeAI      # For Gemini LLM replies
-from langchain_community.embeddings import HuggingFaceEmbeddings  # For local text embeddings
-from langchain_core.runnables import RunnableBranch, RunnablePassthrough  # For routing logic
-from langchain_community.vectorstores import FAISS           # For vector similarity search
-from langchain.schema import Document                        # To store intent text
-from langchain.memory import ConversationBufferMemory        # To store chat history
-from dotenv import load_dotenv                               # To load API keys
-import re                                                    # For command matching
+import re
+from typing import Dict, Any, List
 
-# Load environment variables from .env file
+from langchain_groq import ChatGroq
+from langchain.memory import ConversationTokenBufferMemory
+
+from langchain.agents import Tool, initialize_agent, AgentType
+
+from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain.schema import Document
+from dotenv import load_dotenv 
+import os 
 load_dotenv()
 
-# ============================================
-# 1. MEMORY
-# ============================================
-# Stores previous user–AI conversation
-memory = ConversationBufferMemory(
-    memory_key="chat_history",
-    return_messages=True
+# ============================================================
+# 1. MAIN LLM
+# ============================================================
+
+llm = ChatGroq(
+    model_name="llama-3.3-70b-versatile",
+    temperature=0.2
 )
 
-# Temporary in-memory storage for student marks
-marks_memory = {}
+# ============================================================
+# 2. GLOBAL STORES
+# ============================================================
 
-# ============================================
-# 2. LLM (FOR DEFAULT RESPONSES ONLY)
-# ============================================
-# Gemini model is used only for normal questions
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    convert_system_message_to_human=True
-)
+memory_store: Dict[str, ConversationTokenBufferMemory] = {}
+sessions: Dict[str, Dict[str, Any]] = {}
+agent_store: Dict[str, Any] = {}
 
-# ============================================
-# 3. EMBEDDINGS MODEL (FOR SEMANTIC SIMILARITY)
-# ============================================
-# Local model for converting text into vectors
-embeddings = HuggingFaceEmbeddings(
+vector_store = None
+embedding_model = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
 )
 
-# ============================================
-# 4. TOOLS
-# ============================================
-# Tool for positive responses
-def positive_prompt_tool(request: str):
-    return f"Stay strong! {request}"
+# ============================================================
+# 3. MEMORY HANDLING
+# ============================================================
 
-# Tool for negative responses
-def negative_prompt_tool(request: str):
-    return f"Negative prompt: Avoid negativity like '{request}'"
+def get_memory(session_id: str) -> ConversationTokenBufferMemory:
+    if session_id not in memory_store:
+        memory_store[session_id] = ConversationTokenBufferMemory(
+            llm=llm,
+            max_token_limit=3000,
+            return_messages=True,
+            memory_key="chat_history",
+        )
+    return memory_store[session_id]
 
-# Tool for sensitive suicide-related queries
-def suicide_related_tool(request: str):
-    return (
-        "I'm really sorry you feel this way. "
-        "Please reach out to someone you trust or a nearby helpline immediately. "
-        "You matter, and there are people who care about you."
+
+def get_or_create_session(session_id: str) -> Dict[str, Any]:
+    if session_id not in sessions:
+        sessions[session_id] = {"marks": {}}
+    return sessions[session_id]
+
+
+def get_user_history(session_id: str) -> str:
+    memory = get_memory(session_id)
+    messages = memory.load_memory_variables({}).get("chat_history", [])
+
+    if not messages:
+        return "No chat history found."
+
+    lines = []
+    for msg in messages:
+        role = "USER" if msg.type == "human" else "AI"
+        lines.append(f"{role}: {msg.content}")
+
+    return "\n".join(lines)
+
+# ============================================================
+# 4. VECTOR DATABASE
+# ============================================================
+
+def init_vector_db():
+    global vector_store
+    vector_store = FAISS.from_documents(
+        [Document(page_content="system initialization", metadata={"intent": "system"})],
+        embedding_model
     )
 
-# Tool to add and retrieve student marks
-def student_marks_tool(request: str):
-    global marks_memory
-
-    if not isinstance(request, str):
-        request = str(request)
-
-    # Pattern to ADD marks
-    add_pattern = r"add\s+(\w+)\s+marks\s+(\d+)\s+for\s+(\w+)"
-    match_add = re.search(add_pattern, request.lower())
-
-    if match_add:
-        name, score, subject = match_add.groups()
-        score = int(score)
-
-        if name not in marks_memory:
-            marks_memory[name] = {}
-
-        marks_memory[name][subject] = score
-        return f"Added marks: {name.title()} - {subject}: {score}"
-
-    # Pattern to GET marks
-    get_pattern = r"get\s+.*marks.*\b(\w+)\b.*for\s+(\w+)"
-    match_get = re.search(get_pattern, request.lower())
-
-    if match_get:
-        name, subject = match_get.groups()
-        if name in marks_memory and subject in marks_memory[name]:
-            return f"{name.title()} scored {marks_memory[name][subject]} in {subject}."
-        else:
-            return f"No marks found for {name.title()} in {subject}."
-
-    # If command format is incorrect
-    return "Use 'add alice marks 92 for math' or 'get marks of alice for math'."
-
-# ============================================
-# 5. SEMANTIC INTENT DOCUMENTS
-# ============================================
-# These define how each intent looks in meaning (for similarity search)
-documents = [
-    Document(
-        page_content="say something positive motivation encouragement happy inspire",
-        metadata={"label": "positive"}
-    ),
-
-    Document(
-        page_content="say something negative sad angry complain frustrated upset",
-        metadata={"label": "negative"}
-    ),
-
-    Document(
-        page_content=(
-            "add student marks get student marks update marks "
-            "add alice marks 90 for math "
-            "get marks of alice for math "
-            "store exam score retrieve exam score"
-        ),
-        metadata={"label": "marks"}
-    ),
-
-    Document(
-        page_content="suicide self harm kill myself die depression hopeless end life",
-        metadata={"label": "suicide"}
-    ),
-
-    Document(
-        page_content="general question normal chat ask anything information",
-        metadata={"label": "default"}
+def store_in_vector_db(text: str, intent: str):
+    doc = Document(
+        page_content=text,
+        metadata={"intent": intent}
     )
-]
+    vector_store.add_documents([doc])
 
-# ============================================
-# 6. FAISS VECTOR DATABASE
-# ============================================
-# Converts intent documents into vectors and stores them
-vector_db = FAISS.from_documents(documents, embeddings)
 
-# ============================================
-# 7. SEMANTIC ROUTER FUNCTION
-# ============================================
-# Finds the closest intent using vector similarity
-def semantic_router(user_query: str):
-    result = vector_db.similarity_search_with_score(user_query, k=1)
+def semantic_router(query: str) -> str:
+    result = vector_store.similarity_search_with_score(query, k=1)
 
-    best_match = result[0]
-    label = best_match[0].metadata["label"]
-    score = best_match[1]
+    if not result:
+        return "generic"
 
-    # If similarity is weak, send to default LLM
+    doc, score = result[0]
+    intent = doc.metadata.get("intent", "generic")
+
     if score > 1.2:
-        return "default"
+        return "generic"
 
-    return label
+    return intent
 
-# ============================================
-# 8. ROUTER CONDITIONS
-# ============================================
-# These act like if–else checks for routing
-def is_positive(x): return x["decision"] == "positive"
-def is_negative(x): return x["decision"] == "negative"
-def is_marks(x): return x["decision"] == "marks"
-def is_suicide(x): return x["decision"] == "suicide"
 
-# ============================================
-# 9. TOOL BRANCHES
-# ============================================
-# Each branch connects an intent to its tool
-positive_branch = RunnablePassthrough.assign(
-    output=lambda x: positive_prompt_tool(x.get("request"))
-)
+init_vector_db()
 
-negative_branch = RunnablePassthrough.assign(
-    output=lambda x: negative_prompt_tool(x.get("request"))
-)
+# ============================================================
+# 5. STUDENT MARKS TOOL
+# ============================================================
 
-marks_branch = RunnablePassthrough.assign(
-    output=lambda x: student_marks_tool(x.get("request"))
-)
+def calculate_grade(score: int) -> str:
+    if score >= 90: return "S"
+    if score >= 80: return "A"
+    if score >= 70: return "B"
+    if score >= 60: return "C"
+    if score >= 50: return "D"
+    if score >= 40: return "E"
+    return "F"
 
-suicide_branch = RunnablePassthrough.assign(
-    output=lambda x: suicide_related_tool(x.get("request"))
-)
 
-default_branch = RunnablePassthrough.assign(
-    output=lambda x: f"I can help! Here's my reply:\n\n{llm.invoke(x.get('request')).content}"
-)
+def student_marks_tool(text: str, session_id: str):
+    marks = get_or_create_session(session_id)["marks"]
 
-# ============================================
-# 10. DELEGATION LOGIC
-# ============================================
-# Decides which tool is executed
-delegation_chain = RunnableBranch(
-    (is_positive, positive_branch),
-    (is_negative, negative_branch),
-    (is_marks, marks_branch),
-    (is_suicide, suicide_branch),
-    default_branch
-)
+    pairs = re.findall(r"([A-Za-z]+)\s*[-:]?\s*(\d{1,3})", text)
 
-# ============================================
-# 11. COORDINATOR AGENT (SEMANTIC ROUTING)
-# ============================================
-# Full pipeline: input → semantic routing → tool → output
-coordinator_agent = (
-    RunnablePassthrough()
-    .assign(decision=lambda x: semantic_router(x["request"]))
-    | delegation_chain
-    | (lambda x: x["output"])
-)
+    if not pairs:
+        if not marks:
+            return "No marks stored yet."
 
-# ============================================
-# 12. MAIN LOOP
-# ============================================
-print("\n=== LangChain Semantic Router with Memory ===")
-print("Try:")
-print("- add alice marks 92 for math")
-print("- get marks of alice for math")
-print("- say something positive")
-print("- say something negative")
-print("- any normal question\n")
+        lines = ["| Subject | Marks | Grade |", "|---|---|---|"]
+        for s, m in marks.items():
+            lines.append(f"| {s} | {m} | {calculate_grade(m)} |")
+        return "\n".join(lines)
+
+    for subject, score in pairs:
+        marks[subject.title()] = int(score)
+
+    avg = sum(marks.values()) / len(marks)
+    return f"Marks updated. Current Average = {avg:.2f}%"
+
+# ============================================================
+# 6. TOOLS
+# ============================================================
+
+def positive_prompt_tool(text: str, session_id: str):
+    prompt = f"User: {text}\nRespond positively in 2 sentences."
+    return llm.invoke(prompt).content.strip()
+
+
+def negative_prompt_tool(text: str, session_id: str):
+    prompt = f"User: {text}\nRespond empathetically with one suggestion."
+    return llm.invoke(prompt).content.strip()
+
+
+def suicide_safety_tool(_: str, session_id: str):
+    return (
+        "I'm really sorry you're feeling this way.\n"
+        "Please reach out to someone you trust or call a helpline immediately."
+    )
+
+# ============================================================
+# 7. LANGCHAIN TOOL REGISTRATION
+# ============================================================
+
+def get_agent(session_id: str):
+
+    if session_id in agent_store:
+        return agent_store[session_id]
+
+    memory = get_memory(session_id)
+
+    tools = [
+        Tool("PositiveResponse",
+             lambda t: positive_prompt_tool(t, session_id),
+             "For happy or motivational messages"),
+
+        Tool("NegativeResponse",
+             lambda t: negative_prompt_tool(t, session_id),
+             "For sad or emotional messages"),
+
+        Tool("StudentMarks",
+             lambda t: student_marks_tool(t, session_id),
+             "For storing and viewing marks"),
+
+        Tool("SafetyTool",
+             lambda t: suicide_safety_tool(t, session_id),
+             "For suicide or self-harm situations"),
+    ]
+
+    agent = initialize_agent(
+        tools=tools,
+        llm=llm,
+        memory=memory,
+        agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
+        verbose=True
+    )
+
+    agent_store[session_id] = agent
+    return agent
+
+# ============================================================
+# 8. MAIN CHAT ROUTER (WITH HISTORY SUPPORT )
+# ============================================================
+
+def chat(message: str, session_id: str = "default") -> str:
+
+    if not message.strip():
+        return "Please type something."
+
+    #  History Command
+    if message.lower() == "history":
+        return get_user_history(session_id)
+
+    # Save query to memory
+    get_memory(session_id).save_context({"input": message}, {"output": ""})
+
+    #  Save query to vector DB
+    store_in_vector_db(message, "raw_user_input")
+
+    #  Semantic routing
+    intent = semantic_router(message)
+
+    #  Tool execution
+    if intent == "positive":
+        reply = positive_prompt_tool(message, session_id)
+    elif intent == "negative":
+        reply = negative_prompt_tool(message, session_id)
+    elif intent == "academic":
+        reply = student_marks_tool(message, session_id)
+    elif intent == "safety":
+        reply = suicide_safety_tool(message, session_id)
+    else:
+        agent = get_agent(session_id)
+        reply = agent.run(message)
+
+    #  Save final response to memory
+    get_memory(session_id).save_context({"input": message}, {"output": reply})
+
+    #  Store response in vector DB
+    store_in_vector_db(reply, intent)
+
+    return reply
+
+# ============================================================
+# 9. RUN LOOP
+# ============================================================
+
+print("\n=== LangChain Semantic Tool Agent (With History) ===")
 
 while True:
-    query = input("\nEnter your query: ")
-
-    if query.lower() in ["exit", "quit"]:
+    q = input("\nUser: ")
+    if q.lower() in ["exit", "quit"]:
         break
 
-    # Get response from coordinator agent
-    result = coordinator_agent.invoke({"request": query})
-
-    # Save conversation in memory
-    memory.save_context(
-        {"human": query},
-        {"ai": result}
-    )
-
-    print("\nOUTPUT:", result)
+    ans = chat(q)
+    print("AI:", ans)
