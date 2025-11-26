@@ -1,33 +1,23 @@
-#Core LangChain and specific dependencies for your router logic
+# ================================
+# LangChain core stack (0.3.x)
+# ================================
+langchain==0.3.27
+langchain-core==0.3.79
+langchain-community==0.3.31
+langsmith==0.4.43
 
-langchain==0.1.20
-langchain-core==0.1.52
-langchain-community==0.0.38
-langchain-google-genai==0.0.11
-
-#Your existing dependencies
-
-python-dotenv
- # standard library, but good practice to list all used modules
-langchain-text-splitters==0.0.2
-langsmith==0.1.147
-numpy==1.26.4
-packaging==23.2
-tenacity==8.5.0
-
+# Groq LLM integration
+langchain-groq==0.3.8
 
 # ================================
-# Semantic Similarity (NEW)
+# Semantic similarity (FAISS + embeddings)
 # ================================
 faiss-cpu
 sentence-transformers
 torch
+tiktoken
 
-
-#Dependencies for the new architecture
-
-fastapi
-uvicorn[standard]
-streamlit
-requests
-pydantic
+# ================================
+# Utilities
+# ================================
+python-dotenv
