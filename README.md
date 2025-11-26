@@ -1,11 +1,12 @@
-
 ---
 
 # 📘 LangChain AI-Tool-Calling Agent 
 
 ## 🧩 **Overview**
 
-This project is a **LangChain Router-Agent** that uses **tool calling, prompt classification, memory**, and **FastAPI + Streamlit** to build an AI system that automatically routes user queries to different tools:
+This project is a **LangChain Semantic Router–Agent** that uses **vector embeddings**, **FAISS semantic similarity**, tool calling, session memory, and a **FastAPI + Streamlit** architecture to intelligently route user queries to the correct tool without using an LLM for routing.
+
+Instead of using an LLM to classify the intent, this system performs semantic routing by comparing user query embeddings with predefined intent embeddings stored in a vector database.
 
 * Positive message generator
 * Negative prompt handler
@@ -67,7 +68,9 @@ Classifies each incoming query into:
 
 ## 🏗️ **Project Architecture**
 
-<img width="1344" height="768" alt="Gemini_Generated_Image_gdn7ljgdn7ljgdn7" src="https://github.com/user-attachments/assets/56cbd7df-c1bc-432a-8eb0-83180eb5b32c" />
+
+<img width="1344" height="768" alt="Gemini_Generated_Image_y94brmy94brmy94b" src="https://github.com/user-attachments/assets/b33e44c8-2eb1-4aa6-a2fc-6310ac6a94ee" />
+
 
 
 ---
