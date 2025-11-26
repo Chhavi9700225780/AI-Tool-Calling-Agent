@@ -2,82 +2,142 @@ import os
 import re
 from typing import Dict, Any
 
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from dotenv import load_dotenv
+from fastapi import FastAPI                          # For creating backend API
+from fastapi.middleware.cors import CORSMiddleware  # To allow frontend requests
+from pydantic import BaseModel                      # For request validation
+from dotenv import load_dotenv                      # To load environment variables
 
-# LangChain Imports 
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnableBranch, RunnablePassthrough
-from langchain.memory import ConversationBufferMemory 
+# LangChain + Semantic Imports
+from langchain_google_genai import ChatGoogleGenerativeAI   # Gemini LLM
+from langchain_core.runnables import RunnableBranch, RunnablePassthrough  # For routing
+from langchain.memory import ConversationBufferMemory      # For chat memory
+from langchain_community.embeddings import HuggingFaceEmbeddings  # For local embeddings
+from langchain_community.vectorstores import FAISS                  # For vector DB
+from langchain.schema import Document                               # For intent docs
 
 # --- Setup ---
-load_dotenv()
+load_dotenv()   # Loads API keys from .env file
 app = FastAPI(title="LangChain ToolCalling Agent API", version="0.1.20-compatible")
 
-# Configure CORS to allow the Streamlit frontend to access the API
-
+# Allow Streamlit frontend to call API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],     # Allow all origins
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Pydantic model for request body
+# Request body format
 class QueryRequest(BaseModel):
     query: str
     session_id: str
 
 
 # ============================================================
-# 1. STATE MANAGEMENT (Global for simplicity, thread-safe access is limited)
+# 1. STATE MANAGEMENT
 # ============================================================
 
-
+# Stores student marks in memory
 marks_memory: Dict[str, Dict[str, int]] = {}
 
-# Dictionary to hold separate memory buffers for each user/session
+# Stores conversation memory for each user session
 session_memories: Dict[str, ConversationBufferMemory] = {}
 
 def get_session_memory(session_id: str) -> ConversationBufferMemory:
-    """Retrieves or creates a ConversationBufferMemory instance for a given session ID."""
+    # Creates memory if session is new
     if session_id not in session_memories:
-        # Initialize memory with your compatible ChatGoogleGenerativeAI LLM
-        # Note: In 0.1.x, memory usually stores the history but doesn't handle the conversion for LLMs
         session_memories[session_id] = ConversationBufferMemory(
-            memory_key="chat_history", 
+            memory_key="chat_history",
             return_messages=True
         )
     return session_memories[session_id]
 
 
 # ============================================================
-# 2. LLM CONFIGURATION
+# 2. LLM CONFIGURATION (ONLY FOR DEFAULT CHAT)
 # ============================================================
+
+# Gemini model is only used for general queries
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
-    # This is to handle the system prompt
-    convert_system_message_to_human=True 
+    convert_system_message_to_human=True
 )
 
 
 # ============================================================
-# 3. TOOL HANDLERS
+# 3. EMBEDDINGS + VECTOR DATABASE (SEMANTIC ROUTING)
 # ============================================================
 
+# Local embedding model to convert text into vectors
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
+
+# Example texts for each intent
+documents = [
+    Document(
+        page_content="positive motivation encouragement happy inspire",
+        metadata={"label": "positive"}
+    ),
+
+    Document(
+        page_content="negative sad angry complain frustrated upset",
+        metadata={"label": "negative"}
+    ),
+
+    Document(
+        page_content=(
+            "add student marks get student marks "
+            "add alice marks 92 for math "
+            "get marks of alice for math"
+        ),
+        metadata={"label": "marks"}
+    ),
+
+    Document(
+        page_content="suicide self harm kill myself depression hopeless",
+        metadata={"label": "suicide"}
+    ),
+
+    Document(
+        page_content="general question normal chat ask anything",
+        metadata={"label": "default"}
+    ),
+]
+
+
+# Store the intent vectors in FAISS
+vector_db = FAISS.from_documents(documents, embeddings)
+
+# Finds the closest intent using vector similarity
+def semantic_router(user_query: str):
+    result = vector_db.similarity_search_with_score(user_query, k=1)
+
+    best_match = result[0]
+    label = best_match[0].metadata["label"]
+    score = best_match[1]
+
+    # If similarity is weak, send to default LLM
+    if score > 1.2:
+        return "default"
+
+    return label
+
+
+# ============================================================
+# 4. TOOL HANDLERS
+# ============================================================
+
+# Handles positive type responses
 def positive_prompt_tool(request: str):
     return f"Stay strong! {request}"
 
-
+# Handles negative type responses
 def negative_prompt_tool(request: str):
     return f"Negative prompt: Avoid negativity like '{request}'"
 
-
+# Handles sensitive suicide-related queries
 def suicide_related_tool(request: str):
     return (
         "I'm really sorry you feel this way. "
@@ -85,11 +145,11 @@ def suicide_related_tool(request: str):
         "You matter, and there are people who care about you."
     )
 
-
+# Adds and retrieves student marks
 def student_marks_tool(request: str):
     global marks_memory
 
-    # ADD MARKS
+    # Pattern to ADD marks
     add_pattern = r"add\s+(\w+)\s+marks\s+(\d+)\s+for\s+(\w+)"
     match_add = re.search(add_pattern, request.lower())
 
@@ -103,7 +163,7 @@ def student_marks_tool(request: str):
 
         return f"Added marks: {name.title()} - {subject}: {score}"
 
-    # GET MARKS
+    # Pattern to GET marks
     get_pattern = r"get\s+.*marks.*\b(\w+)\b.*for\s+(\w+)"
     match_get = re.search(get_pattern, request.lower())
 
@@ -118,25 +178,21 @@ def student_marks_tool(request: str):
 
 
 # ============================================================
-# 4. ROUTER CHAIN 
+# 5. ROUTER CONDITIONS
 # ============================================================
-router_prompt = ChatPromptTemplate.from_messages([
-    ("system",
-     """Classify the user's request into exactly ONE label:
-       positive, negative, marks, suicide, default"""
-     ),
-    ("user", "{request}")
-])
 
-router_chain = router_prompt | llm | StrOutputParser()
+# These act like if–else checks
+def is_positive(x): return x["decision"] == "positive"
+def is_negative(x): return x["decision"] == "negative"
+def is_marks(x): return x["decision"] == "marks"
+def is_suicide(x): return x["decision"] == "suicide"
 
-# --- Conditions ---
-def is_positive(x): return x["decision"].strip().lower() == "positive"
-def is_negative(x): return x["decision"].strip().lower() == "negative"
-def is_marks(x): return x["decision"].strip().lower() == "marks"
-def is_suicide(x): return x["decision"].strip().lower() == "suicide"
 
-# --- Branches ---
+# ============================================================
+# 6. TOOL BRANCHES
+# ============================================================
+
+# Connects each intent to its tool
 positive_branch = RunnablePassthrough.assign(
     output=lambda x: positive_prompt_tool(x.get("request"))
 )
@@ -153,14 +209,17 @@ suicide_branch = RunnablePassthrough.assign(
     output=lambda x: suicide_related_tool(x.get("request"))
 )
 
-# The default branch now handles general questions by invoking the LLM directly
-# The LLM invocation here bypasses the memory, which is handled in the FastAPI endpoint below.
+# Default branch uses Gemini for normal questions
 default_branch = RunnablePassthrough.assign(
     output=lambda x: llm.invoke(x.get('request')).content
 )
 
 
-# --- Delegation Logic ---
+# ============================================================
+# 7. DELEGATION LOGIC
+# ============================================================
+
+# Decides which branch to execute
 delegation_chain = RunnableBranch(
     (is_positive, positive_branch),
     (is_negative, negative_branch),
@@ -170,46 +229,48 @@ delegation_chain = RunnableBranch(
 )
 
 
-# --- Coordinator ---
+# ============================================================
+# 8. COORDINATOR (SEMANTIC ROUTING)
+# ============================================================
+
+# Full flow: input → semantic router → tool → output
 coordinator_agent = (
     RunnablePassthrough()
-    .assign(decision=router_chain)
+    .assign(decision=lambda x: semantic_router(x["request"]))
     | delegation_chain
     | (lambda x: x["output"])
 )
 
+
 # ============================================================
-# 5. API ENDPOINT
+# 9. API ENDPOINT
 # ============================================================
 
 @app.post("/query")
 async def handle_query(request: QueryRequest) -> Dict[str, str]:
     """
-    Endpoint to receive a user query and process it through the LangChain router.
-    Handles memory storage and retrieval.
+    Receives query from frontend,
+    routes it using semantic similarity,
+    and returns the response.
     """
     user_query = request.query
     session_id = request.session_id
-    
-    # 1. Retrieve history for context (Note: The coordinator_agent above doesn't use history in this setup)
-    # The current setup only uses memory for *saving* context, not retrieving it for the router prompt.
-    # To fully integrate memory for conversation, the `router_prompt` and `default_branch` LLM call 
-    # would need to be updated to inject history. For this implementation, we simply save it.
-    
+
     try:
-        # 2. Invoke the router/tool chain
+        # Run router + tool chain
         result = coordinator_agent.invoke({"request": user_query})
 
-        # 3. Save conversation history
+        # Save conversation for the session
         session_memory = get_session_memory(session_id)
         session_memory.save_context({"human": user_query}, {"ai": result})
-        
+
         return {"response": result}
 
     except Exception as e:
-        return {"response": f"An error occurred during processing: {e}"}
+        return {"response": f"An error occurred: {e}"}
 
+
+# Health check API
 @app.get("/")
 def read_root():
-    return {"message": "LangChain Router API is running."}
-
+    return {"message": "LangChain Semantic Router API is running."}

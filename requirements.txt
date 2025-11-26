@@ -15,6 +15,14 @@ numpy==1.26.4
 packaging==23.2
 tenacity==8.5.0
 
+
+# ================================
+# Semantic Similarity (NEW)
+# ================================
+faiss-cpu
+sentence-transformers
+torch
+
 #Dependencies for the new architecture
 
 fastapi
