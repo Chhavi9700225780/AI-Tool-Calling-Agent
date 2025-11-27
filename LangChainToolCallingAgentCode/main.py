@@ -1,16 +1,25 @@
 import re
 from typing import Dict, Any, List
-
-from langchain_groq import ChatGroq
-from langchain.memory import ConversationTokenBufferMemory
-
+# groq llm is used for generating the ai response
+from langchain_groq import ChatGroq 
+# short term memory stores the recent user query and respones within the token limit it is used because to maintain chat history and conversation continuity
+from langchain.memory import ConversationTokenBufferMemory  
+#Tool → Used to register custom tools
+# initialize_agent → Creates the reasoning agent so that when no tool matched through sementic similarity it uses llm reasoning to choose correct tool
+# then tool directly invoke the groq llm and ai response get generated
 from langchain.agents import Tool, initialize_agent, AgentType
-
+#HuggingFaceEmbeddings →  it will convert user query into numerical vectors
+#FAISS → Vector database for semantic similarity used by semantic router to choose the correct tool 
+# working of FAISS = Facebook AI Similarity Search in my code
+# it will Store embeddings of user queries and responses
+# it Perform semantic routing through semantic router
+# it Match new queries with previous similar intents
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
+
 from langchain.schema import Document
-from dotenv import load_dotenv 
-import os 
+from dotenv import load_dotenv   # to get env variables 
+import os  
 load_dotenv()
 
 # ============================================================
@@ -18,26 +27,38 @@ load_dotenv()
 # ============================================================
 
 llm = ChatGroq(
-    model_name="llama-3.3-70b-versatile",
-    temperature=0.2
+    model_name="llama-3.3-70b-versatile",     # it Creates a connection with Groq’s LLaMA model
+    temperature=0.2 # it's value i kept low to get controlled ,stable, less random response from llm
 )
 
 # ============================================================
 # 2. GLOBAL STORES
 # ============================================================
 
-memory_store: Dict[str, ConversationTokenBufferMemory] = {}
+memory_store: Dict[str, ConversationTokenBufferMemory] = {}  #Stores short-term conversation memory per user session to maintain chat history and for follow up questions 
+
+#Stores long-term structured user data
+#Used here for:
+#Student marks storage
+
 sessions: Dict[str, Dict[str, Any]] = {}
+
+#Stores one agent per session
+#Prevents recreating agents repeatedly
 agent_store: Dict[str, Any] = {}
 
 vector_store = None
 embedding_model = HuggingFaceEmbeddings(
     model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+) #Converts user response into dense vector
+# Used for semantic similarity search
 
 # ============================================================
 # 3. MEMORY HANDLING
 # ============================================================
+
+# Returns a memory object for the user per session
+# If not exists it will creates one
 
 def get_memory(session_id: str) -> ConversationTokenBufferMemory:
     if session_id not in memory_store:
@@ -46,16 +67,19 @@ def get_memory(session_id: str) -> ConversationTokenBufferMemory:
             max_token_limit=3000,
             return_messages=True,
             memory_key="chat_history",
-        )
+        ) # this will stores last 3000 tokens, it auto delete the old messages  because it is a short term memory used only for
+        #maintain recent chat history and to handle follow up questions per user session 
     return memory_store[session_id]
 
-
+#Creates a per-user data storage 
+#Used to store:
+#Student subject marks
 def get_or_create_session(session_id: str) -> Dict[str, Any]:
     if session_id not in sessions:
         sessions[session_id] = {"marks": {}}
-    return sessions[session_id]
+    return sessions[session_id]     
 
-
+#Reads past conversation from memory
 def get_user_history(session_id: str) -> str:
     memory = get_memory(session_id)
     messages = memory.load_memory_variables({}).get("chat_history", [])
@@ -74,12 +98,15 @@ def get_user_history(session_id: str) -> str:
 # 4. VECTOR DATABASE
 # ============================================================
 
+#Creates FAISS using a dummy document
 def init_vector_db():
     global vector_store
     vector_store = FAISS.from_documents(
         [Document(page_content="system initialization", metadata={"intent": "system"})],
         embedding_model
     )
+
+# here user query + llm response get convert into vector and then  stores in vector labled as intent : row_user_query
 
 def store_in_vector_db(text: str, intent: str):
     doc = Document(
@@ -88,17 +115,18 @@ def store_in_vector_db(text: str, intent: str):
     )
     vector_store.add_documents([doc])
 
-
+# this function uses semantic similarity and find the most semantically similar past text with current user query and return the predicted intent okay 
 def semantic_router(query: str) -> str:
     result = vector_store.similarity_search_with_score(query, k=1)
 
     if not result:
-        return "generic"
+        return "generic" # if FAISS did NOT find a strong semantic match then Control is passed to the LangChain Agent
+        ##The agent uses: LLM reasoning to decides on its own which tool is best
 
     doc, score = result[0]
     intent = doc.metadata.get("intent", "generic")
 
-    if score > 1.2:
+    if score > 1.2:  # means No real semantic match
         return "generic"
 
     return intent
@@ -109,7 +137,7 @@ init_vector_db()
 # ============================================================
 # 5. STUDENT MARKS TOOL
 # ============================================================
-
+@tool
 def calculate_grade(score: int) -> str:
     if score >= 90: return "S"
     if score >= 80: return "A"
@@ -119,9 +147,9 @@ def calculate_grade(score: int) -> str:
     if score >= 40: return "E"
     return "F"
 
-
+@tool
 def student_marks_tool(text: str, session_id: str):
-    marks = get_or_create_session(session_id)["marks"]
+    marks = get_or_create_session(session_id)["marks"] # stores the marks per user session in ltm
 
     pairs = re.findall(r"([A-Za-z]+)\s*[-:]?\s*(\d{1,3})", text)
 
@@ -143,17 +171,17 @@ def student_marks_tool(text: str, session_id: str):
 # ============================================================
 # 6. TOOLS
 # ============================================================
-
+@tool
 def positive_prompt_tool(text: str, session_id: str):
     prompt = f"User: {text}\nRespond positively in 2 sentences."
     return llm.invoke(prompt).content.strip()
 
-
+@tool
 def negative_prompt_tool(text: str, session_id: str):
     prompt = f"User: {text}\nRespond empathetically with one suggestion."
     return llm.invoke(prompt).content.strip()
 
-
+@tool
 def suicide_safety_tool(_: str, session_id: str):
     return (
         "I'm really sorry you're feeling this way.\n"
@@ -193,7 +221,7 @@ def get_agent(session_id: str):
         tools=tools,
         llm=llm,
         memory=memory,
-        agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION,
+        agent=AgentType.CHAT_CONVERSATIONAL_REACT_DESCRIPTION, # agent that -> Thinks, Selects tools, Uses memory.
         verbose=True
     )
 
