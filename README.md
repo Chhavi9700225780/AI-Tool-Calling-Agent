@@ -37,7 +37,7 @@ LangChainToolCallingAgentCode/
 
 ## 🧠 Overall Project Architecture
 
-<img width="2496" height="1468" alt="autodraw 26_11_2025 (1)" src="https://github.com/user-attachments/assets/0361172b-ac52-4685-a493-5278be3cf974" />
+<img width="2496" height="1468" alt="autodraw 28_11_2025" src="https://github.com/user-attachments/assets/df971e5c-f4c3-4fc5-bbb6-0c36366c6ff0" />
 
 ---
 
