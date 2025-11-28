@@ -131,6 +131,18 @@ def semantic_router(query: str) -> str:
 
     return intent
 
+#Retrieves the top k most semantically similar past documents
+#This function retrieves the top-k most semantically similar past interactions from the FAISS vector database and 
+# converts them into a single context string that is injected into the LLM prompt for long-term memory-based responses.
+def retrieve_context_from_vector_db(query: str, k: int = 3) -> str:
+    results = vector_store.similarity_search(query, k=k)
+
+    if not results:
+        return ""
+
+    context = "\n".join([doc.page_content for doc in results])
+    return context
+
 
 init_vector_db()
 
@@ -247,21 +259,32 @@ def chat(message: str, session_id: str = "default") -> str:
     #  Save query to vector DB
     store_in_vector_db(message, "raw_user_input")
 
+    # Retrieve relevant past context from FAISS (NEW)
+    retrieved_context = retrieve_context_from_vector_db(message)
+
     #  Semantic routing
     intent = semantic_router(message)
 
-    #  Tool execution
+   
+    # Tool execution with context injection
     if intent == "positive":
-        reply = positive_prompt_tool(message, session_id)
+        enriched_input = f"Past Context:\n{retrieved_context}\n\nUser: {message}"
+        reply = positive_prompt_tool(enriched_input, session_id)
+
     elif intent == "negative":
-        reply = negative_prompt_tool(message, session_id)
+        enriched_input = f"Past Context:\n{retrieved_context}\n\nUser: {message}"
+        reply = negative_prompt_tool(enriched_input, session_id)
+
     elif intent == "academic":
         reply = student_marks_tool(message, session_id)
+
     elif intent == "safety":
         reply = suicide_safety_tool(message, session_id)
+
     else:
         agent = get_agent(session_id)
-        reply = agent.run(message)
+       # enriched_input = f"Past Context:\n{retrieved_context}\n\nUser: {message}"
+        reply = agent.run(enriched_input)
 
     #  Save final response to memory
     get_memory(session_id).save_context({"input": message}, {"output": reply})
