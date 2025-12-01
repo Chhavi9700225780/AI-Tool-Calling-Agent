@@ -52,6 +52,9 @@ User types a message in **Streamlit UI** → It is sent to FastAPI via `/chat` A
 
 ![WhatsApp Image 2025-11-26 at 22 08 42_0f462c70](https://github.com/user-attachments/assets/1520a027-63ac-41e6-8648-0793add6f924)
 
+<img width="1893" height="809" alt="session-history" src="https://github.com/user-attachments/assets/a8ecbee5-e6e1-44a7-9e90-beea4ae9173a" />
+
+
 
 ### Step 2: Router Memory Stores the Message
 ```python
