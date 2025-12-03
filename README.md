@@ -55,7 +55,6 @@ User types a message in **Streamlit UI** → It is sent to FastAPI via `/chat` A
 <img width="1893" height="809" alt="session-history" src="https://github.com/user-attachments/assets/a8ecbee5-e6e1-44a7-9e90-beea4ae9173a" />
 
 
-
 ### Step 2: Router Memory Stores the Message
 ```python
 get_memory(session_id).save_context({"input": message}, {"output": ""})
